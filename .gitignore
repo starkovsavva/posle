@@ -15,6 +15,11 @@ rust-core/target/
 cache/
 models/
 runtime/
+# Git may match runtime/ against Runtime/ on case-insensitive checkouts. SwiftPM
+# compiles these native sources, so they must be available in a clean archive.
+!/Sources/AfterPlatformMacOS/Runtime/
+/Sources/AfterPlatformMacOS/Runtime/*
+!/Sources/AfterPlatformMacOS/Runtime/*.swift
 meetings/
 transcriptions/
 *.mp3

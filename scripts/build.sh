@@ -4,6 +4,9 @@ umask 022
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${POSLE_BUILD_DIR:-$PROJECT/.build}"
 cd "$PROJECT"
+# Refuse ignored Swift implementation files: a local build must not succeed
+# with inputs that a clean checkout and the published source archive omit.
+python3 "$PROJECT/scripts/check_platform_boundaries.py"
 # Validate a requested Apple identity before building. An unset identity keeps
 # the existing ad-hoc development signature.
 python3 "$PROJECT/scripts/signing.py" --check

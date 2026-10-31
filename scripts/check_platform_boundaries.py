@@ -121,8 +121,31 @@ def source_violations(relative: Path, source: str) -> list[str]:
     return diagnostics
 
 
+def check_ignored_swift_sources(root: Path) -> list[str]:
+    """Inspect every compiled source area, including the native app target.
+
+    --no-index deliberately checks tracked paths too: an ignore rule may hide
+    the next source added beside an already tracked file. NUL framing keeps
+    spaces and non-ASCII paths intact and never expands shell arguments.
+    """
+    paths = sorted(path.relative_to(root).as_posix()
+                   for path in (root / "Sources").rglob("*.swift") if path.is_file())
+    if not paths:
+        return []
+    result = subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "--no-index", "-z", "--stdin"],
+        input=b"".join(os.fsencode(path) + b"\0" for path in paths),
+        capture_output=True, check=False, timeout=30,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError("Could not inspect Swift source ignore rules: git check-ignore failed")
+    ignored = [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
+    return [f"{path}: Swift source is ignored by Git and may be absent from a clean checkout"
+            for path in ignored]
+
+
 def check_sources(root: Path) -> list[str]:
-    diagnostics = []
+    diagnostics = check_ignored_swift_sources(root)
     for module in MODULES:
         directory = root / "Sources" / module
         if not directory.is_dir():
@@ -228,7 +251,7 @@ def main() -> int:
     if diagnostics:
         print("\n".join(diagnostics), file=sys.stderr)
         return 1
-    print("Platform boundaries passed: portable imports, workflow ports and acyclic package graph")
+    print("Platform boundaries passed: non-ignored Swift sources, portable imports, workflow ports and acyclic package graph")
     return 0
 
 

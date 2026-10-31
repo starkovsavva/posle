@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,10 @@ import check_platform_boundaries as boundaries
 
 
 class PlatformBoundaryTests(unittest.TestCase):
+    def fixture_git(self, root):
+        subprocess.run(["git", "init", "--template=", "-q", str(root)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "config", "core.ignorecase", "true"], check=True)
+
     def violations(self, module, source, filename="Fixture.swift"):
         return boundaries.source_violations(Path("Sources") / module / filename, source)
 
@@ -124,6 +129,55 @@ import Foundation
             self.assertNotIn("--disable-sandbox", command)
             boundaries.dump_package(Path(temporary), disable_sandbox=True)
             self.assertIn("--disable-sandbox", run.call_args.args[0])
+
+    def test_ignored_swift_sources_include_app_and_tracked_native_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture_git(root)
+            paths = ["Sources/AfterApp/Runtime/Has space.swift",
+                     "Sources/AfterPlatformMacOS/Runtime/Worker.swift",
+                     "Sources/FutureClient/Runtime/Native.swift"]
+            for name in paths:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("import Foundation\n")
+            # Even a tracked file must remain visible to the ignore regression
+            # check. The next untracked sibling otherwise silently disappears.
+            subprocess.run(["git", "-C", str(root), "add", paths[1]], check=True)
+            (root / ".gitignore").write_text("runtime/\n")
+            found = boundaries.check_ignored_swift_sources(root)
+            self.assertEqual({line.split(":", 1)[0] for line in found}, set(paths))
+
+    def test_repo_runtime_exception_keeps_swift_visible_and_runtime_data_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture_git(root)
+            (root / ".gitignore").write_text((boundaries.ROOT / ".gitignore").read_text())
+            swift = root / "Sources/AfterPlatformMacOS/Runtime/ProcessRunner.swift"
+            swift.parent.mkdir(parents=True)
+            swift.write_text("import Foundation\n")
+            runtime = root / "runtime/private-cache.bin"
+            runtime.parent.mkdir()
+            runtime.write_bytes(b"fixture")
+            sibling = swift.parent / "private-cache.bin"
+            sibling.write_bytes(b"fixture")
+            self.assertEqual(boundaries.check_ignored_swift_sources(root), [])
+            ignored = subprocess.check_output(
+                ["git", "-C", str(root), "check-ignore", "--no-index", "-z", "--stdin"],
+                input=b"runtime/private-cache.bin\0Sources/AfterPlatformMacOS/Runtime/private-cache.bin\0",
+            ).split(b"\0")
+            self.assertEqual(len([path for path in ignored if path]), 2)
+
+    def test_ignore_inspection_errors_fail_instead_of_claiming_sources_visible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Sources/AfterApp/Screen.swift"
+            source.parent.mkdir(parents=True)
+            source.write_text("import Foundation\n")
+            # This directory is not a repository. Never turn Git's failure into
+            # the successful empty result used when no source is ignored.
+            with self.assertRaisesRegex(RuntimeError, "git check-ignore failed"):
+                boundaries.check_ignored_swift_sources(root)
 
 
 if __name__ == "__main__":
